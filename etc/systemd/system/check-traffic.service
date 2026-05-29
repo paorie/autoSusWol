@@ -1,0 +1,11 @@
+[Unit]
+Description=Controllo traffico per ibernazione
+
+[Service]
+Type=oneshot
+#RemainAfterExit=yes
+ExecStart=/usr/local/bin/check-traffic.sh
+User=root
+
+[Install]
+WantedBy=timers.target

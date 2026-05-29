@@ -1,0 +1,9 @@
+[Unit]
+Description=Esegue il controllo traffico ogni 5 minuti
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
