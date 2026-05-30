@@ -15,16 +15,16 @@ cleanup() {
   local exit_code=$?
 
   # Se non ci sono errori non fare nulla
-  if [ $exit_code -eq 0 ]; then
+  if [ "$exit_code" -eq 0 ]; then
     return
   fi
   echo ""
   echo "!!! ERRORE RILEVATO, ESECUZIONE ROLLBACK"
 
   # Eseguii rollback su errore
-  for dir in "${SOURCE_DIRS[@]}/*"; do
-    for file in $dir; do
-      local dest_file="/$dir/$file"
+  for dir in "${SOURCE_DIRS[@]}"; do
+    for file in "$dir"/*; do
+      local dest_file="/$file"
       if [ -f "$dest_file" ]; then
         rm -f "$dest_file"
         echo "Rimosso file $dest_file"
@@ -41,7 +41,7 @@ cleanup() {
 trap cleanup EXIT
 
 # Verifica privilegio di root
-if [ "$EUIID" -ne 0 ]; then
+if [ "$EUID" -ne 0 ]; then
   echo "Errore: Eseguire con i privilegi di root"
   exit 1
 fi
@@ -49,3 +49,21 @@ fi
 echo "Avvio installazione..."
 
 # 1. Copia dei files
+for dir in "${SOURCE_DIRS[@]}"; do
+  files=("$dir"/*)
+  cp -rv "${files[@]}" "/$dir"/
+  if [ "$dir" = "$BIN_FILES" ]; then
+    for f in "${files[@]}"; do
+      chmod +x "/$f"
+    done
+  fi
+done
+
+echo " Ricaricamento systemd..."
+
+systemctl daemon-reload
+
+# SE TUTTO VA bene
+echo "Installazione Completata"
+trap - EXIT
+exit 0
