@@ -11,6 +11,7 @@ BIN_FILES="usr/local/bin"
 SOURCE_DIRS=("$CONFIG_FILES" "$SERVICE_FILES" "$BIN_FILES")
 
 # Funzione di rollback
+# shellcheck disable=SC2329
 cleanup() {
   local exit_code=$?
 
