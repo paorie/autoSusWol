@@ -6,9 +6,10 @@ set -e
 # --- Configurazione ---
 CONFIG_FILES="etc"
 SERVICE_FILES="etc/systemd/system"
+RESET_FILES="usr/lib/systemd/system-sleep"
 BIN_FILES="usr/local/bin"
 
-SOURCE_DIRS=("$CONFIG_FILES" "$SERVICE_FILES" "$BIN_FILES")
+SOURCE_DIRS=("$CONFIG_FILES" "$SERVICE_FILES" "$RESET_FILES" "$BIN_FILES")
 
 # Funzione di rollback
 # shellcheck disable=SC2329
