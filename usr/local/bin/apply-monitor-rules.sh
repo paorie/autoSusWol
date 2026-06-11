@@ -11,29 +11,26 @@ WOL_TIMEOUT=15 # secondi attesa risveglio (suspend ~8s)
 # SEZIONE 1 — Regole nft locali sul server
 # ============================================================
 
-PORT_LIST_NFT=$(grep -v 'wol-only' "$CONF" | sed 's/#.*//' | grep -Eo '[0-9]+' | tr '\n' ',' | sed 's/,$//')
 PORT_LIST=$(sed 's/#.*//' "$CONF" | grep -Eo '[0-9]+' | tr '\n' ',' | sed 's/,$//')
 
 if nft list table inet traffic_monitor >/dev/null 2>&1; then
   nft flush chain inet traffic_monitor monitor_input
   nft flush chain inet traffic_monitor monitor_forward
-  nft reset counter inet traffic_monitor total_traffic
 else
   nft add table inet traffic_monitor
   nft add chain inet traffic_monitor monitor_input \
     '{ type filter hook input priority -10 ; }'
   nft add chain inet traffic_monitor monitor_forward \
     '{ type filter hook forward priority -10 ; }'
-  nft add counter inet traffic_monitor total_traffic
 fi
 
 for proto in tcp udp; do
   nft add rule inet traffic_monitor monitor_input \
-    "$proto dport { $PORT_LIST_NFT } counter"
+    "$proto dport { $PORT_LIST } counter"
   nft add rule inet traffic_monitor monitor_forward \
-    "$proto dport { $PORT_LIST_NFT } counter"
+    "$proto dport { $PORT_LIST } counter"
 done
-nft add rule inet traffic_monitor monitor_input counter name total_traffic accept
+
 # ============================================================
 # SEZIONE 2 — Regole UCI firewall sul router
 # ============================================================
@@ -141,30 +138,20 @@ WOL_INIT_SCRIPT=$(
 #!/bin/sh /etc/rc.common
 START=99
 STOP=10
+USE_PROCD=1
 
-PIDFILE="/var/run/wol-monitor.pid"
-boot() {
-    start
-}
-
-start() {
-    /usr/local/bin/wol-monitor.sh &
-    echo $! > "$PIDFILE"
-}
-
-stop() {
-    if [ -f "$PIDFILE" ]; then
-        kill $(cat "$PIDFILE") 2>/dev/null
-        rm -f "$PIDFILE"
-    fi
-    kill $(ps | grep "wol-monitor" | grep -v grep | awk '{print $1}') 2>/dev/null
-    kill $(ps | grep "logread -f" | grep -v grep | awk '{print $1}') 2>/dev/null
+start_service() {
+    procd_open_instance
+    procd_set_param command /usr/local/bin/wol-monitor.sh
+    procd_set_param respawn
+    procd_set_param stdout 1
+    procd_set_param stderr 1
+    procd_close_instance
 }
 SCRIPT
 )
 
 # Copia gli script sul router via pipe — evita problemi di quoting
-ssh -i "$SSH_KEY" -T -q "root@$ROUTER_IP" "mkdir -p /usr/local/bin"
 printf '%s\n' "${WOL_TRIGGER_SCRIPT}" | ssh -i "$SSH_KEY" -T -q "root@$ROUTER_IP" \
   "cat > /usr/local/bin/wol-trigger.sh && chmod +x /usr/local/bin/wol-trigger.sh"
 

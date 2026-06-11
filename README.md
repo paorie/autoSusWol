@@ -57,6 +57,7 @@ The server VLAN is configured so that all traffic between LAN and server passes 
 - `nftables`
 - `curl`
 - `ss` (iproute2)
+- `smbstatus` (samba-common package, for Samba activity detection)
 - WOL enabled in BIOS and on the NIC (`ethtool -s ethX wol g`)
 - SSH key pair for passwordless access to the router
 
@@ -84,6 +85,12 @@ The server VLAN is configured so that all traffic between LAN and server passes 
 | `systemd/system/check-traffic.timer` | Runs `check-traffic.sh` every 5 minutes |
 | `systemd/network/10-wol-eth1.link` | Enables WOL on the server NIC at boot |
 
+### Server side (`/usr/lib/systemd/system-sleep/`)
+
+| File | Description |
+|---|---|
+| `tbsecp3-reset.sh` | Stops tvheadend and unloads TBS PCIe DVB tuner drivers before suspend, reloads them and restarts tvheadend after resume. Only needed if using TBS PCIe DVB tuner cards. |
+
 ### Router side (deployed automatically by `apply-monitor-rules.sh`)
 
 | File | Description |
@@ -101,12 +108,13 @@ The server VLAN is configured so that all traffic between LAN and server passes 
 # Format: PORT   # service_name [!wol-only]
 #
 # !wol-only: port is monitored by the router for WOL trigger
-#            but excluded from local traffic counters (used for
-#            services that generate background traffic, like tvheadend)
+#            but excluded from local active-connection checks.
+#            Use for services that generate background traffic
+#            (e.g. tvheadend EPG sync, Samba keepalives).
 #
-#22   # ssh          — disabled: avoid keeping server awake during admin
+#22   # ssh          — disabled: avoid keeping server awake during admin sessions
 80    # http
-445   # samba
+445   # samba         !wol-only  — Samba activity checked via smbstatus instead
 7125  # klipper
 9000  # portainer
 9090  # cockpit
@@ -143,9 +151,34 @@ uci set network.SERVER.proto='static'
 uci set network.SERVER.device='br-server'
 uci set network.SERVER.ipaddr='192.168.20.1'
 uci set network.SERVER.netmask='255.255.255.0'
-# ... (see full network setup in documentation)
 uci commit network
 /etc/init.d/network restart
+```
+
+Create the firewall zone and forwarding rules:
+
+```bash
+uci add firewall zone
+uci set firewall.@zone[-1].name='server'
+uci set firewall.@zone[-1].input='ACCEPT'
+uci set firewall.@zone[-1].output='ACCEPT'
+uci set firewall.@zone[-1].forward='REJECT'
+uci add_list firewall.@zone[-1].network='SERVER'
+
+uci add firewall forwarding
+uci set firewall.@forwarding[-1].src='server'
+uci set firewall.@forwarding[-1].dest='wan'
+
+uci add firewall forwarding
+uci set firewall.@forwarding[-1].src='server'
+uci set firewall.@forwarding[-1].dest='lan'
+
+uci add firewall forwarding
+uci set firewall.@forwarding[-1].src='lan'
+uci set firewall.@forwarding[-1].dest='server'
+
+uci commit firewall
+fw4 reload
 ```
 
 ### 2. Set up SSH key on the server
@@ -153,7 +186,7 @@ uci commit network
 ```bash
 ssh-keygen -t ed25519 -f /root/.ssh/id_rsa_router -N "" -C "server-wol-script"
 ssh-copy-id -i /root/.ssh/id_rsa_router.pub root@192.168.20.1
-ssh-keyscan -H 192.168.20.1 | tee -a /root/.ssh/known_hosts
+ssh-keyscan -H 192.168.20.1 | sudo tee -a /root/.ssh/known_hosts
 ```
 
 ### 3. Install etherwake on the router
@@ -169,7 +202,7 @@ apk add etherwake
 sudo ethtool -s eth1 wol g
 
 # Make persistent via systemd-networkd
-cat > /etc/systemd/network/10-wol-eth1.link << 'EOF'
+sudo tee /etc/systemd/network/10-wol-eth1.link << 'EOF'
 [Match]
 MACAddress=d0:27:88:c5:13:07
 
@@ -178,7 +211,6 @@ Name=eth1
 WakeOnLan=magic
 EOF
 ```
-
 ### 5. Deploy the scripts
 
 ```bash
@@ -240,20 +272,35 @@ If using TBS PCIe DVB tuner cards, add the following sleep hook to reinitialize 
 ```bash
 # /usr/lib/systemd/system-sleep/tbsecp3-reset.sh
 #!/bin/bash
+
+# Usa il nome del container invece dell'ID dinamico
 CONTAINER_NAME=$(docker ps -a | grep -i tvheadend | awk '{print $NF}')
+
 case $1 in
     pre)
-        docker stop "$CONTAINER_NAME" 2>/dev/null
-        modprobe -r tbsecp3 gx1133 tas2101
+        echo "tbsecp3-reset: pre-suspend - stopping tvheadend and unloading modules"
+        docker stop -t 3 "$CONTAINER_NAME" 2>/dev/null
+        # Forza reset PCIe prima di scaricare il modulo
+        echo 1 > /sys/bus/pci/devices/0000:01:00.0/remove 2>/dev/null
+        echo 1 > /sys/bus/pci/devices/0000:02:00.0/remove 2>/dev/null
+        sleep 1
+        modprobe -r tbsecp3
+        modprobe -r gx1133
+        modprobe -r tas2101
         ;;
     post)
+        echo "tbsecp3-reset: post-resume - reloading modules and starting tvheadend"
         sleep 2
-        modprobe tas2101 gx1133 tbsecp3
+        # Rescan PCIe bus per rilevare le schede
+        echo 1 > /sys/bus/pci/rescan
+        sleep 2
+        modprobe tas2101
+        modprobe gx1133
+        modprobe tbsecp3
         sleep 5
         docker start "$CONTAINER_NAME" 2>/dev/null
         ;;
 esac
-```
 
 ## Troubleshooting
 

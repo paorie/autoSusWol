@@ -22,15 +22,25 @@ if [ "$IS_STREAMING" -gt 0 ]; then
   exit 0
 fi
 
-# 3. CONTROLLO CONNESSIONI ATTIVE SULLE PORTE MONITORATE
-ACTIVE=$(ss -tn state established | grep -cE ":(80|445|7125|9000|9090) ")
+# 3. CONTROLLO FILE SAMBA APERTI
+# Usa smbstatus invece di ss per evitare falsi positivi da keepalive KIO/Dolphin
+SAMBA_FILES=$(smbstatus --locked 2>/dev/null | grep -c ".")
+
+if [ "$SAMBA_FILES" -gt 0 ]; then
+  echo "File Samba aperti ($SAMBA_FILES). Sospensione bloccata."
+  exit 0
+fi
+
+# 4. CONTROLLO CONNESSIONI ATTIVE SULLE ALTRE PORTE MONITORATE
+# Porta 445 (Samba) esclusa — gestita dal controllo smbstatus sopra
+ACTIVE=$(ss -tn state established | grep -cE ":(80|7125|9000|9090) ")
 
 if [ "$ACTIVE" -gt 0 ]; then
   echo "Connessioni attive rilevate ($ACTIVE). Sospensione bloccata."
   exit 0
 fi
 
-# 4. NESSUNA ATTIVITÀ — SOSPENSIONE
+# 5. NESSUNA ATTIVITÀ — SOSPENSIONE
 echo "Nessuna attività rilevata. Sospensione tra 60 secondi..."
 sleep 60
 systemctl suspend

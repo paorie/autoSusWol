@@ -1,0 +1,6 @@
+[Match]
+MACAddress=d0:27:88:c5:13:07
+
+[Link]
+Name=eth1
+WakeOnLan=magic

@@ -54,7 +54,7 @@ echo "Avvio installazione..."
 for dir in "${SOURCE_DIRS[@]}"; do
   files=("$dir"/*)
   cp -rv "${files[@]}" "/$dir"/
-  if [ "$dir" = "$BIN_FILES" ]; then
+  if [ "$dir" = "$BIN_FILES" ] || [ "$dir" = "$RESET_FILES" ]; then
     for f in "${files[@]}"; do
       chmod +x "/$f"
     done
