@@ -1,6 +1,6 @@
 #!/bin/bash
-TVH_USER="odino"
-TVH_PASSWORD="presoter1"
+TVH_USER="{{TVH_USER}}"
+TVH_PASSWORD="{{TVH_PASSWORD}}"
 
 # 1. CONTROLLO STAMPANTE
 IS_PRINTING=$(curl -s \
@@ -8,7 +8,7 @@ IS_PRINTING=$(curl -s \
   grep -c '"state":"printing"')
 
 if [ "$IS_PRINTING" -gt 0 ]; then
-  echo "Stampante in stampa: sospensione bloccata."
+  echo "Printer printing: Suspension locked."
   exit 0
 fi
 
@@ -18,7 +18,7 @@ IS_STREAMING=$(curl -s \
   grep -c '"streaming":1')
 
 if [ "$IS_STREAMING" -gt 0 ]; then
-  echo "TV in riproduzione: sospensione bloccata."
+  echo "TV playing: Suspension locked."
   exit 0
 fi
 
@@ -27,7 +27,7 @@ fi
 SAMBA_FILES=$(smbstatus --locked 2>/dev/null | grep -c ".")
 
 if [ "$SAMBA_FILES" -gt 0 ]; then
-  echo "File Samba aperti ($SAMBA_FILES). Sospensione bloccata."
+  echo "Open Samba files ($SAMBA_FILES). Suspension locked."
   exit 0
 fi
 
@@ -36,11 +36,11 @@ fi
 ACTIVE=$(ss -tn state established | grep -cE ":(80|7125|9000|9090) ")
 
 if [ "$ACTIVE" -gt 0 ]; then
-  echo "Connessioni attive rilevate ($ACTIVE). Sospensione bloccata."
+  echo "Active connections detected ($ACTIVE). Suspension locked."
   exit 0
 fi
 
 # 5. NESSUNA ATTIVITÀ — SOSPENSIONE
-echo "Nessuna attività rilevata. Sospensione tra 60 secondi..."
+echo "No activity detected. Suspending in 60 seconds...."
 sleep 60
 systemctl suspend

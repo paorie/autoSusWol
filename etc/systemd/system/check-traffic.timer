@@ -1,5 +1,5 @@
 [Unit]
-Description=Esegue il controllo traffico ogni 5 minuti
+Description=Runs traffic check every 5 minutes
 
 [Timer]
 OnBootSec=5min

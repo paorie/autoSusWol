@@ -1,5 +1,5 @@
 [Unit]
-Description=Applica regole firewall monitoraggio al boot
+Description=Apply firewall monitoring rules on boot
 After=network-online.target
 Wants=network-online.target
 StartLimitIntervalSec=60
@@ -7,7 +7,7 @@ StartLimitBurst=3
 
 [Service]
 Type=oneshot
-ExecStartPre=/bin/sh -c 'until ping -c1 -W1 192.168.20.1 >/dev/null 2>&1; do sleep 2; done'
+ExecStartPre=/bin/sh -c 'until ping -c1 -W1 {{ROUTER_IP}} >/dev/null 2>&1; do sleep 2; done'
 ExecStart=/usr/local/bin/apply-monitor-rules.sh
 Restart=on-failure
 RestartSec=10

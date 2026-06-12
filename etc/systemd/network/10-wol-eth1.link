@@ -1,6 +1,6 @@
 [Match]
-MACAddress=d0:27:88:c5:13:07
+MACAddress={{NIC_MAC}}
 
 [Link]
-Name=eth1
+Name={{NIC_IFACE}}
 WakeOnLan=magic

@@ -1,17 +1,17 @@
 #!/bin/bash
 CONF="/etc/monitor-ports.conf"
-ROUTER_IP="192.168.20.1"
+ROUTER_IP="{{ROUTER_IP}}"
 SSH_KEY="/root/.ssh/id_rsa_router"
-SERVER_IP="192.168.20.108"
-SERVER_MAC="d0:27:88:c5:13:07"
-SERVER_IFACE="br-server"
-WOL_TIMEOUT=15 # secondi attesa risveglio (suspend ~8s)
+SERVER_IP="{{SERVER_IP}}"
+SERVER_MAC="{{SERVER_MAC}}"
+SERVER_IFACE="{{SERVER_IFACE}}"
+WOL_TIMEOUT={{WOL_TIMEOUT}}
 
 # ============================================================
-# SEZIONE 1 — Regole nft locali sul server
+# SECTION 1 — Local NFT Rules on the Server
 # ============================================================
 
-PORT_LIST=$(sed 's/#.*//' "$CONF" | grep -Eo '[0-9]+' | tr '\n' ',' | sed 's/,$//')
+PORT_LIST=$(grep -v 'wol-only' "$CONF" | sed 's/#.*//' | grep -Eo '[0-9]+' | tr '\n' ',' | sed 's/,$//')
 
 if nft list table inet traffic_monitor >/dev/null 2>&1; then
   nft flush chain inet traffic_monitor monitor_input
@@ -32,11 +32,10 @@ for proto in tcp udp; do
 done
 
 # ============================================================
-# SEZIONE 2 — Regole UCI firewall sul router
+# SECTION 2 — UCI Firewall Rules on the Router
 # ============================================================
 
 UCI_CMDS="
-# Rimuovi regole WOL esistenti
 while uci -q delete firewall.\$(uci show firewall | grep 'WOL_' | head -1 | cut -d. -f2 | cut -d= -f1) 2>/dev/null; do :; done
 "
 
@@ -45,7 +44,7 @@ while IFS= read -r line; do
   [[ "$line" =~ ^[[:space:]]*# ]] && continue
 
   PORT=$(echo "$line" | grep -Eo '^[[:space:]]*[0-9]+' | tr -d ' ')
-  COMMENT=$(echo "$line" | sed 's/.*#[[:space:]]*//')
+  COMMENT=$(echo "$line" | sed 's/.*#[[:space:]]*//' | sed 's/[[:space:]]*!wol-only.*//')
 
   if [ "$COMMENT" = "$line" ] || [ -z "$COMMENT" ]; then
     NAME="WOL_${PORT}"
@@ -74,15 +73,10 @@ fw4 reload
 "
 
 # ============================================================
-# SEZIONE 3 — Script WOL sul router
-# I valori delle variabili vengono espansi qui (lato server)
-# e hardcodati negli script sul router.
-# Usiamo printf+pipe per evitare problemi di quoting SSH.
+# SECTION 3 — WOL Script on the Router
 # ============================================================
 
-# --- wol-trigger.sh ---
-WOL_TRIGGER_SCRIPT=$(
-  cat <<SCRIPT
+WOL_TRIGGER_SCRIPT=$(cat <<SCRIPT
 #!/bin/sh
 SERVER_IP="${SERVER_IP}"
 SERVER_MAC="${SERVER_MAC}"
@@ -90,24 +84,22 @@ SERVER_IFACE="${SERVER_IFACE}"
 WAIT_TIMEOUT=${WOL_TIMEOUT}
 LOCKFILE="/tmp/wol-trigger.lock"
 
-# Evita esecuzioni multiple simultanee
 if [ -f "\$LOCKFILE" ]; then
     exit 0
 fi
 
-# Server gia' sveglio — non fare nulla
 if ping -c1 -W1 "\$SERVER_IP" >/dev/null 2>&1; then
     exit 0
 fi
 
 touch "\$LOCKFILE"
-logger -t wol-trigger "Server non raggiungibile, invio magic packet a \$SERVER_MAC"
+logger -t wol-trigger "Server unreachable, sending magic packet to \$SERVER_MAC"
 etherwake -i "\$SERVER_IFACE" "\$SERVER_MAC"
 
 i=0
 while [ \$i -lt \$WAIT_TIMEOUT ]; do
     if ping -c1 -W1 "\$SERVER_IP" >/dev/null 2>&1; then
-        logger -t wol-trigger "Server raggiungibile dopo \${i}s"
+        logger -t wol-trigger "Server reachable after \${i}s"
         rm -f "\$LOCKFILE"
         exit 0
     fi
@@ -115,43 +107,49 @@ while [ \$i -lt \$WAIT_TIMEOUT ]; do
     i=\$((i+1))
 done
 
-logger -t wol-trigger "Timeout: server non risponde dopo \${WAIT_TIMEOUT}s"
+logger -t wol-trigger "Timeout: server not responding after \${WAIT_TIMEOUT}s"
 rm -f "\$LOCKFILE"
 exit 1
 SCRIPT
 )
 
-# --- wol-monitor.sh ---
-WOL_MONITOR_SCRIPT=$(
-  cat <<'SCRIPT'
+WOL_MONITOR_SCRIPT=$(cat <<'SCRIPT'
 #!/bin/sh
-# Monitora i log fw4 per prefissi WOL_ e sveglia il server
 logread -f | grep -i "WOL_" | while read -r line; do
     /usr/local/bin/wol-trigger.sh &
 done
 SCRIPT
 )
 
-# --- init.d/wol-monitor ---
-WOL_INIT_SCRIPT=$(
-  cat <<'SCRIPT'
+WOL_INIT_SCRIPT=$(cat <<'SCRIPT'
 #!/bin/sh /etc/rc.common
 START=99
 STOP=10
-USE_PROCD=1
 
-start_service() {
-    procd_open_instance
-    procd_set_param command /usr/local/bin/wol-monitor.sh
-    procd_set_param respawn
-    procd_set_param stdout 1
-    procd_set_param stderr 1
-    procd_close_instance
+PIDFILE="/var/run/wol-monitor.pid"
+
+boot() {
+    start
+}
+
+start() {
+    /usr/local/bin/wol-monitor.sh &
+    echo $! > "$PIDFILE"
+}
+
+stop() {
+    if [ -f "$PIDFILE" ]; then
+        kill $(cat "$PIDFILE") 2>/dev/null
+        rm -f "$PIDFILE"
+    fi
+    kill $(ps | grep "wol-monitor" | grep -v grep | awk '{print $1}') 2>/dev/null
+    kill $(ps | grep "logread -f" | grep -v grep | awk '{print $1}') 2>/dev/null
 }
 SCRIPT
 )
 
-# Copia gli script sul router via pipe — evita problemi di quoting
+ssh -i "$SSH_KEY" -T -q "root@$ROUTER_IP" "mkdir -p /usr/local/bin"
+
 printf '%s\n' "${WOL_TRIGGER_SCRIPT}" | ssh -i "$SSH_KEY" -T -q "root@$ROUTER_IP" \
   "cat > /usr/local/bin/wol-trigger.sh && chmod +x /usr/local/bin/wol-trigger.sh"
 
@@ -160,9 +158,9 @@ printf '%s\n' "${WOL_MONITOR_SCRIPT}" | ssh -i "$SSH_KEY" -T -q "root@$ROUTER_IP
 
 printf '%s\n' "${WOL_INIT_SCRIPT}" | ssh -i "$SSH_KEY" -T -q "root@$ROUTER_IP" \
   "cat > /etc/init.d/wol-monitor && chmod +x /etc/init.d/wol-monitor \
-     && /etc/init.d/wol-monitor enable && /etc/init.d/wol-monitor restart"
+   && /etc/init.d/wol-monitor enable && /etc/init.d/wol-monitor restart"
 
 # ============================================================
-# SEZIONE 4 — Regole UCI firewall sul router
+# SECTION 4 — UCI Firewall Rules on the Router
 # ============================================================
 ssh -i "$SSH_KEY" -T -q "root@$ROUTER_IP" "$UCI_CMDS"

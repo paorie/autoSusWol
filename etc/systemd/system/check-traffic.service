@@ -1,5 +1,5 @@
 [Unit]
-Description=Controllo traffico per ibernazione
+Description=Hibernation traffic control
 
 [Service]
 Type=oneshot

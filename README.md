@@ -11,33 +11,33 @@ autoSusWol automatically suspends a home server when it's not in use and wakes i
 1. A timer runs `check-traffic.sh` on the server every 5 minutes
 2. The script checks for active connections to monitored services
 3. If no activity is detected (and no printer/TV is in use), the server suspends after a 60-second grace period
-4. The router monitors firewall logs for connection attempts to the server's ports
+4. The router monitors firewall logs for connection attempts to the server ports
 5. When a connection attempt is detected, the router sends a WOL magic packet
 6. The server wakes up and becomes available within ~10 seconds
 
 ## Architecture
 
 ```
-┌─────────────────┐         ┌──────────────────────┐
-│   CLIENT (LAN)  │         │   OPENWRT ROUTER      │
-│  192.168.8.x    │────────▶│   192.168.20.1        │
-└─────────────────┘         │                       │
-                            │  wol-monitor.sh        │
-                            │  watches fw4 logs      │
-                            │  sends WOL packet      │
-                            └──────────┬────────────┘
-                                       │ br-server (192.168.20.x)
-                            ┌──────────▼────────────┐
-                            │   HOME SERVER          │
-                            │   192.168.20.108       │
-                            │                       │
-                            │  check-traffic.sh      │
-                            │  apply-monitor-rules   │
-                            │  Docker containers:    │
-                            │  - tvheadend           │
-                            │  - portainer           │
-                            │  - klipper             │
-                            └───────────────────────┘
++-------------------+         +------------------------+
+|   CLIENT (LAN)    |         |   OPENWRT ROUTER       |
+|   192.168.8.x     |-------->|   192.168.20.1         |
++-------------------+         |                        |
+                              |  wol-monitor.sh         |
+                              |  watches fw4 logs       |
+                              |  sends WOL packet       |
+                              +------------+-----------+
+                                           | br-server (192.168.20.x)
+                              +------------v-----------+
+                              |   HOME SERVER           |
+                              |   192.168.20.x          |
+                              |                        |
+                              |  check-traffic.sh       |
+                              |  apply-monitor-rules    |
+                              |  Docker containers:     |
+                              |  - tvheadend            |
+                              |  - portainer            |
+                              |  - klipper              |
+                              +------------------------+
 ```
 
 ## Network topology
@@ -54,12 +54,10 @@ The server VLAN is configured so that all traffic between LAN and server passes 
 
 ### Server
 - Linux with systemd
-- `nftables`
-- `curl`
-- `ss` (iproute2)
-- `smbstatus` (samba-common package, for Samba activity detection)
-- WOL enabled in BIOS and on the NIC (`ethtool -s ethX wol g`)
-- SSH key pair for passwordless access to the router
+- `nftables`, `curl`, `ss` (iproute2), `ethtool`
+- `smbstatus` (samba-common, for Samba activity detection)
+- WOL enabled in BIOS
+- SSH access to the router
 
 ### Router
 - OpenWrt 25.x with firewall4 (fw4)
@@ -72,24 +70,24 @@ The server VLAN is configured so that all traffic between LAN and server passes 
 
 | File | Description |
 |---|---|
-| `apply-monitor-rules.sh` | Main configuration script — sets up nft rules on the server and firewall rules + WOL scripts on the router |
+| `apply-monitor-rules.sh` | Main config script — sets up nft rules on the server and deploys firewall rules + WOL scripts to the router via SSH |
 | `check-traffic.sh` | Checks for active connections and suspends the server if idle |
 
 ### Server side (`/etc/`)
 
 | File | Description |
 |---|---|
-| `monitor-ports.conf` | List of ports to monitor. Use `!wol-only` tag to include a port in WOL trigger but exclude it from local traffic monitoring |
+| `monitor-ports.conf` | List of ports to monitor. Use `!wol-only` to include a port in the WOL trigger but exclude it from local connection checks |
 | `systemd/system/apply-monitor-rules.service` | Runs `apply-monitor-rules.sh` at boot |
 | `systemd/system/check-traffic.service` | Oneshot service triggered by the timer |
 | `systemd/system/check-traffic.timer` | Runs `check-traffic.sh` every 5 minutes |
-| `systemd/network/10-wol-eth1.link` | Enables WOL on the server NIC at boot |
+| `systemd/network/10-wol-eth1.link` | Template — installed as `10-wol-<iface>.link` with the actual NIC name |
 
 ### Server side (`/usr/lib/systemd/system-sleep/`)
 
 | File | Description |
 |---|---|
-| `tbsecp3-reset.sh` | Stops tvheadend and unloads TBS PCIe DVB tuner drivers before suspend, reloads them and restarts tvheadend after resume. Only needed if using TBS PCIe DVB tuner cards. |
+| `tbsecp3-reset.sh` | Stops tvheadend and unloads TBS PCIe DVB tuner drivers before suspend; reloads them and restarts tvheadend after resume. Only needed with TBS PCIe DVB tuner cards. |
 
 ### Router side (deployed automatically by `apply-monitor-rules.sh`)
 
@@ -101,10 +99,26 @@ The server VLAN is configured so that all traffic between LAN and server passes 
 
 ## Configuration
 
+The repository files use `{{PLACEHOLDER}}` syntax for all machine-specific values. The `install.sh` script detects and substitutes them automatically — **you should not edit the files manually before running install.sh**.
+
+### Placeholders reference
+
+| Placeholder | Description | Auto-detected |
+|---|---|---|
+| `{{NIC_IFACE}}` | Server NIC interface name (e.g. `eth1`, `enp3s0`) | yes |
+| `{{NIC_MAC}}` | Server NIC MAC address | yes |
+| `{{SERVER_IP}}` | Server IP on the server VLAN | yes |
+| `{{ROUTER_IP}}` | Router IP on the server VLAN | yes (from default gateway) |
+| `{{SERVER_IFACE}}` | Router bridge interface name (e.g. `br-server`) | asked (default: br-server) |
+| `{{WOL_TIMEOUT}}` | Max seconds to wait for server after WOL | asked (default: 15) |
+| `{{TVH_USER}}` | tvheadend admin username | asked (optional) |
+| `{{TVH_PASSWORD}}` | tvheadend admin password | asked (optional) |
+| `{{TBS_PCI_1}}` | PCI address of first TBS DVB card | yes via lspci (optional) |
+| `{{TBS_PCI_2}}` | PCI address of second TBS DVB card | yes via lspci (optional) |
+
 ### `monitor-ports.conf`
 
 ```
-# Elenco porte da monitorare
 # Format: PORT   # service_name [!wol-only]
 #
 # !wol-only: port is monitored by the router for WOL trigger
@@ -112,9 +126,9 @@ The server VLAN is configured so that all traffic between LAN and server passes 
 #            Use for services that generate background traffic
 #            (e.g. tvheadend EPG sync, Samba keepalives).
 #
-#22   # ssh          — disabled: avoid keeping server awake during admin sessions
+#22   # ssh          -- disabled: avoid keeping server awake during admin sessions
 80    # http
-445   # samba         !wol-only  — Samba activity checked via smbstatus instead
+445   # samba         !wol-only  -- Samba activity checked via smbstatus instead
 7125  # klipper
 9000  # portainer
 9090  # cockpit
@@ -122,42 +136,35 @@ The server VLAN is configured so that all traffic between LAN and server passes 
 9982  # tvheadend https !wol-only
 ```
 
-### Key variables in `apply-monitor-rules.sh`
-
-```bash
-ROUTER_IP="192.168.20.1"       # Router IP on server VLAN
-SERVER_IP="192.168.20.108"     # Server IP on server VLAN
-SERVER_MAC="d0:27:88:c5:13:07" # Server NIC MAC address
-SERVER_IFACE="br-server"       # Router bridge interface for server VLAN
-WOL_TIMEOUT=15                 # Max seconds to wait for server after WOL
-```
-
-### Key variables in `check-traffic.sh`
-
-```bash
-TVH_USER="your_tvh_admin_user"
-TVH_PASSWORD="your_tvh_admin_password"
-```
-
 ## Installation
 
 ### 1. Configure the router
 
-Create a dedicated bridge interface for the server VLAN:
+Create a dedicated bridge interface for the server VLAN and connect the physical port:
 
 ```bash
+# Remove the server port from the main LAN bridge (adjust lan2 to your port)
+uci del_list network.@device[0].ports='lan2'
+
+# Create the server bridge and interface
+uci add network device
+uci set network.@device[-1].type='bridge'
+uci set network.@device[-1].name='br-server'
+uci set network.@device[-1].ports='lan2'
+uci set network.@device[-1].bridge_empty='1'
+
 uci set network.SERVER=interface
 uci set network.SERVER.proto='static'
 uci set network.SERVER.device='br-server'
 uci set network.SERVER.ipaddr='192.168.20.1'
 uci set network.SERVER.netmask='255.255.255.0'
-uci commit network
-/etc/init.d/network restart
-```
 
-Create the firewall zone and forwarding rules:
+uci set dhcp.SERVER=dhcp
+uci set dhcp.SERVER.interface='SERVER'
+uci set dhcp.SERVER.start='100'
+uci set dhcp.SERVER.limit='10'
+uci set dhcp.SERVER.leasetime='12h'
 
-```bash
 uci add firewall zone
 uci set firewall.@zone[-1].name='server'
 uci set firewall.@zone[-1].input='ACCEPT'
@@ -177,145 +184,113 @@ uci add firewall forwarding
 uci set firewall.@forwarding[-1].src='lan'
 uci set firewall.@forwarding[-1].dest='server'
 
+uci commit network
+uci commit dhcp
 uci commit firewall
+/etc/init.d/network restart
 fw4 reload
 ```
 
-### 2. Set up SSH key on the server
-
-```bash
-ssh-keygen -t ed25519 -f /root/.ssh/id_rsa_router -N "" -C "server-wol-script"
-ssh-copy-id -i /root/.ssh/id_rsa_router.pub root@192.168.20.1
-ssh-keyscan -H 192.168.20.1 | sudo tee -a /root/.ssh/known_hosts
-```
-
-### 3. Install etherwake on the router
+### 2. Install etherwake on the router
 
 ```bash
 apk add etherwake
 ```
 
-### 4. Enable WOL on the server NIC
+### 3. Run the install script on the server
 
 ```bash
-# Enable immediately
-sudo ethtool -s eth1 wol g
-
-# Make persistent via systemd-networkd
-sudo tee /etc/systemd/network/10-wol-eth1.link << 'EOF'
-[Match]
-MACAddress=d0:27:88:c5:13:07
-
-[Link]
-Name=eth1
-WakeOnLan=magic
-EOF
-```
-### 5. Deploy the scripts
-
-```bash
-# Clone the repo
 git clone https://github.com/paorie/autoSusWol.git
 cd autoSusWol
-
-# Copy files to their destinations
-sudo cp usr/local/bin/apply-monitor-rules.sh /usr/local/bin/
-sudo cp usr/local/bin/check-traffic.sh /usr/local/bin/
-sudo cp etc/monitor-ports.conf /etc/
-sudo cp etc/systemd/system/apply-monitor-rules.service /etc/systemd/system/
-sudo cp etc/systemd/system/check-traffic.service /etc/systemd/system/
-sudo cp etc/systemd/system/check-traffic.timer /etc/systemd/system/
-
-# Set permissions
-sudo chmod +x /usr/local/bin/apply-monitor-rules.sh
-sudo chmod +x /usr/local/bin/check-traffic.sh
-
-# Edit configuration
-sudo nano /etc/monitor-ports.conf
-sudo nano /usr/local/bin/apply-monitor-rules.sh  # set ROUTER_IP, SERVER_IP, SERVER_MAC
-sudo nano /usr/local/bin/check-traffic.sh        # set TVH_USER, TVH_PASSWORD
-
-# Run apply-monitor-rules to deploy everything
-sudo /usr/local/bin/apply-monitor-rules.sh
-
-# Enable and start services
-sudo systemctl daemon-reload
-sudo systemctl enable apply-monitor-rules.service
-sudo systemctl enable check-traffic.timer
-sudo systemctl start check-traffic.timer
+sudo ./install.sh
 ```
+
+The script will:
+- Auto-detect NIC interface, MAC address, server IP and default gateway
+- Ask for confirmation and the few values it cannot detect (router bridge name, tvheadend credentials, TBS card presence)
+- Substitute all `{{PLACEHOLDER}}` values in the files before copying them
+- Install the `.link` file with the correct NIC name (e.g. `10-wol-enp3s0.link`)
+- Generate an SSH key and copy it to the router
+- Enable WOL on the NIC via ethtool
+- Enable and start systemd services
+- Run `apply-monitor-rules.sh` to deploy WOL scripts and firewall rules to the router
+
+### 4. Edit `monitor-ports.conf` if needed
+
+After installation, edit `/etc/monitor-ports.conf` to add or remove monitored ports, then re-run:
+
+```bash
+sudo /usr/local/bin/apply-monitor-rules.sh
+```
+
+This re-deploys the firewall rules and WOL scripts to the router without reinstalling everything.
 
 ## Suspension logic
 
 `check-traffic.sh` runs every 5 minutes and suspends the server only when ALL of the following are true:
 
-1. **3D printer is not printing** — checked via Klipper Moonraker API
-2. **No TV streaming active** — checked via tvheadend API (`streaming: 1` field)
-3. **No active TCP connections** on monitored ports (excluding `!wol-only` ports)
+1. **3D printer is not printing** -- checked via Klipper Moonraker API (`/printer/objects/query?print_stats`)
+2. **No TV streaming active** -- checked via tvheadend API (`streaming: 1` in `/api/status/connections`)
+3. **No Samba files open** -- checked via `smbstatus --locked` (ignores background keepalive connections from SMB clients like KDE Dolphin/KIO)
+4. **No active TCP connections** on other monitored ports (80, 7125, 9000, 9090)
 
 When all conditions are met, the script waits 60 seconds before suspending (grace period for pending operations).
+
+### Why smbstatus instead of ss for Samba
+
+SMB clients (including KDE Dolphin/KIO) maintain persistent TCP keepalive connections to Samba shares even when no files are in use. Using `ss` to detect port 445 activity would prevent the server from ever suspending. `smbstatus --locked` only reports files that are actually open, making it a reliable indicator of real Samba usage.
+
+### Why !wol-only for tvheadend and Samba
+
+These services generate continuous background traffic (EPG sync, SMB keepalives) that would prevent suspension even when not actively in use. Marking them `!wol-only` excludes them from local traffic monitoring while keeping them in the router WOL trigger rules -- so the server still wakes up when a client actually tries to connect.
 
 ## WOL trigger logic
 
 `wol-monitor.sh` on the router monitors fw4 firewall logs continuously. When a `WOL_` prefixed log entry appears (meaning a client tried to connect to the server), `wol-trigger.sh` is called which:
 
-1. Checks if the server is already reachable (ping) — exits if yes
+1. Checks if the server is already reachable (ping) -- exits if yes
 2. Uses a lockfile to prevent multiple simultaneous wake attempts
 3. Sends a WOL magic packet via `etherwake`
-4. Polls the server every second until it responds (max 15 seconds)
+4. Polls the server every second until it responds (max `WOL_TIMEOUT` seconds)
 5. Logs all actions via `logger`
 
-## DVB tuner reset after suspend
+## DVB tuner reset after suspend (optional)
 
-If using TBS PCIe DVB tuner cards, add the following sleep hook to reinitialize them after resume:
+If using TBS PCIe DVB tuner cards, `tbsecp3-reset.sh` is installed by `install.sh` to handle the driver lifecycle around suspend/resume.
 
-```bash
-# /usr/lib/systemd/system-sleep/tbsecp3-reset.sh
-#!/bin/bash
+The script is called automatically by systemd-sleep at `/usr/lib/systemd/system-sleep/tbsecp3-reset.sh`.
 
-# Usa il nome del container invece dell'ID dinamico
-CONTAINER_NAME=$(docker ps -a | grep -i tvheadend | awk '{print $NF}')
+**Pre-suspend**: stops the tvheadend container, removes the TBS PCIe devices from the PCI bus, then unloads the driver modules (`tbsecp3`, `gx1133`, `tas2101`) to prevent i2c timeout errors that can cause the system to freeze during suspend.
 
-case $1 in
-    pre)
-        echo "tbsecp3-reset: pre-suspend - stopping tvheadend and unloading modules"
-        docker stop -t 3 "$CONTAINER_NAME" 2>/dev/null
-        # Forza reset PCIe prima di scaricare il modulo
-        echo 1 > /sys/bus/pci/devices/0000:01:00.0/remove 2>/dev/null
-        echo 1 > /sys/bus/pci/devices/0000:02:00.0/remove 2>/dev/null
-        sleep 1
-        modprobe -r tbsecp3
-        modprobe -r gx1133
-        modprobe -r tas2101
-        ;;
-    post)
-        echo "tbsecp3-reset: post-resume - reloading modules and starting tvheadend"
-        sleep 2
-        # Rescan PCIe bus per rilevare le schede
-        echo 1 > /sys/bus/pci/rescan
-        sleep 2
-        modprobe tas2101
-        modprobe gx1133
-        modprobe tbsecp3
-        sleep 5
-        docker start "$CONTAINER_NAME" 2>/dev/null
-        ;;
-esac
+**Post-resume**: rescans the PCI bus to re-detect the cards, reloads the driver modules in the correct dependency order, then restarts the tvheadend container.
+
+The PCI addresses are specific to the hardware -- `install.sh` detects them automatically via `lspci`, or asks for them if not found.
 
 ## Troubleshooting
 
 **Server doesn't suspend**
 - Run `sudo bash -x /usr/local/bin/check-traffic.sh` to see which check is blocking
-- Check active connections: `ss -tn state established`
+- Check Samba file activity: `sudo smbstatus --locked`
 - Check tvheadend connections: `curl -s "http://user:pass@localhost:9981/api/status/connections"`
+- Check other active connections: `ss -tn state established`
 
 **Server doesn't wake up**
 - Check router logs: `logread | grep -E "WOL_|wol-trigger"`
-- Verify wol-monitor is running: `ps | grep wol`
-- Test WOL manually: `etherwake -i br-server MAC_ADDRESS`
-- Verify WOL is enabled on server NIC: `ethtool eth1 | grep Wake`
+- Verify wol-monitor is running on the router: `ps | grep wol`
+- Start wol-monitor manually: `/etc/init.d/wol-monitor start`
+- Test WOL manually: `etherwake -i br-server <MAC_ADDRESS>`
+- Verify WOL is enabled on the server NIC: `ethtool <iface> | grep Wake`
+
+**System freezes during suspend (TBS cards)**
+- Check for i2c timeout errors: `journalctl -b -1 | grep "i2c xfer timeout"`
+- Verify tbsecp3-reset.sh is executable: `ls -la /usr/lib/systemd/system-sleep/tbsecp3-reset.sh`
+- Verify PCI addresses match your hardware: `lspci | grep -i tbs`
 
 **apply-monitor-rules.sh fails**
-- Check SSH connectivity: `sudo ssh -i /root/.ssh/id_rsa_router root@192.168.20.1 "echo OK"`
-- Check router reachability: `ping 192.168.20.1`
+- Check SSH connectivity: `sudo ssh -i /root/.ssh/id_rsa_router root@<ROUTER_IP> "echo OK"`
+- Check router reachability: `ping <ROUTER_IP>`
 - Run with debug: `sudo bash -x /usr/local/bin/apply-monitor-rules.sh`
+
+**install.sh -- SSH key copy fails**
+- Copy manually: `ssh-copy-id -i /root/.ssh/id_rsa_router.pub root@<ROUTER_IP>`
+- Then re-run deploy: `sudo /usr/local/bin/apply-monitor-rules.sh`
