@@ -200,7 +200,7 @@ echo "  IP server        : $SERVER_IP"
 echo "  IP router        : $ROUTER_IP"
 echo "  Bridge router    : $SERVER_IFACE"
 echo "  Timeout WOL      : ${WOL_TIMEOUT}s"
-[ -n "$TVH_USER" ] && echo "  TVH user       : $TVH_USER"
+[ -n "$TVH_USER" ] && echo "  TVH user           : $TVH_USER"
 [ "$HAS_TBS" = "y" ] && echo "  TBS PCI          : $TBS_PCI_1 $TBS_PCI_2"
 echo ""
 
@@ -220,11 +220,11 @@ echo "── Replacing variables in files ──"
 
 # Copy all files to the temporary directory while maintaining the structure
 for dir in "${SOURCE_DIRS[@]}"; do
-    mkdir -p "$TEMP_DIR/$dir"
-    for file in "$dir"/*; do
-        [ -f "$file" ] || continue
-        cp "$file" "$TEMP_DIR/$file"
-    done
+    if [ -d "$dir" ]; then
+        mkdir -p "$TEMP_DIR/$dir"
+        # Copy only if the source directory is not empty
+        find "$dir" -maxdepth 1 -type f -exec cp {} "$TEMP_DIR/$dir/" \;
+    fi
 done
 
 # Function to replace placeholders in a file
@@ -246,12 +246,10 @@ substitute() {
         "$file"
 }
 
-# Replace all temporary files
-for dir in "${SOURCE_DIRS[@]}"; do
-    for file in "$TEMP_DIR/$dir"/*; do
-        substitute "$file"
-        echo "  ✓ $file"
-    done
+# Recursively finds all regular FILES and performs the substitute
+find "$TEMP_DIR" -type f | while read -r file; do
+    substitute "$file"
+    echo "  ✓ $file"
 done
 echo ""
 
