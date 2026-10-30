@@ -21,54 +21,60 @@ trap 'rm -rf "$TEMP_DIR"' EXIT
 # ============================================================
 
 ask() {
-    local prompt="$1"
-    local default="$2"
-    local var_name="$3"
-    local value
+  local prompt="$1"
+  local default="$2"
+  local var_name="$3"
+  local value
 
-    if [ -n "$default" ]; then
-        read -rp "$prompt [$default]: " value
-        value="${value:-$default}"
-    else
-        while [ -z "$value" ]; do
-            read -rp "$prompt: " value
-        done
-    fi
-    eval "$var_name=\"$value\""
+  if [ -n "$default" ]; then
+    read -rp "$prompt [$default]: " value
+    value="${value:-$default}"
+  else
+    while [ -z "$value" ]; do
+      read -rp "$prompt: " value
+    done
+  fi
+  eval "$var_name=\"$value\""
 }
 
 ask_secret() {
-    local prompt="$1"
-    local var_name="$2"
-    local value
+  local prompt="$1"
+  local var_name="$2"
+  local value
 
-    while [ -z "$value" ]; do
-        read -rsp "$prompt: " value
-        echo
-    done
-    eval "$var_name=\"$value\""
+  while [ -z "$value" ]; do
+    read -rsp "$prompt: " value
+    echo
+  done
+  eval "$var_name=\"$value\""
 }
 
 ask_yesno() {
-    local prompt="$1"
-    local default="$2"  # y o n
-    local var_name="$3"
-    local value
+  local prompt="$1"
+  local default="$2" # y o n
+  local var_name="$3"
+  local value
 
-    while true; do
-        if [ "$default" = "y" ]; then
-            read -rp "$prompt [Y/n]: " value
-            value="${value:-y}"
-        else
-            read -rp "$prompt [y/N]: " value
-            value="${value:-n}"
-        fi
-        case "${value,,}" in
-            y|yes) eval "$var_name=y"; return ;;
-            n|no)  eval "$var_name=n"; return ;;
-            *) echo "  return y o n." ;;
-        esac
-    done
+  while true; do
+    if [ "$default" = "y" ]; then
+      read -rp "$prompt [Y/n]: " value
+      value="${value:-y}"
+    else
+      read -rp "$prompt [y/N]: " value
+      value="${value:-n}"
+    fi
+    case "${value,,}" in
+    y | yes)
+      eval "$var_name=y"
+      return
+      ;;
+    n | no)
+      eval "$var_name=n"
+      return
+      ;;
+    *) echo "  return y o n." ;;
+    esac
+  done
 }
 
 # ============================================================
@@ -76,23 +82,23 @@ ask_yesno() {
 # ============================================================
 
 cleanup() {
-    local exit_code=$?
-    if [ "$exit_code" -eq 0 ]; then
-        return
-    fi
-    echo ""
-    echo "!!! ERROR DETECTED, ROLLBACKING"
-    for dir in "${SOURCE_DIRS[@]}"; do
-        for file in "$dir"/*; do
-            [ -f "$file" ] || continue
-            local dest_file="/$file"
-            if [ -f "$dest_file" ]; then
-                rm -f "$dest_file"
-                echo "  Removed: $dest_file"
-            fi
-        done
+  local exit_code=$?
+  if [ "$exit_code" -eq 0 ]; then
+    return
+  fi
+  echo ""
+  echo "!!! ERROR DETECTED, ROLLBACKING"
+  for dir in "${SOURCE_DIRS[@]}"; do
+    for file in "$dir"/*; do
+      [ -f "$file" ] || continue
+      local dest_file="/$file"
+      if [ -f "$dest_file" ]; then
+        rm -f "$dest_file"
+        echo "  Removed: $dest_file"
+      fi
     done
-    echo "Rollback complete. Installation canceled."
+  done
+  echo "Rollback complete. Installation canceled."
 }
 
 trap cleanup EXIT
@@ -102,8 +108,8 @@ trap cleanup EXIT
 # ============================================================
 
 if [ "$EUID" -ne 0 ]; then
-    echo "Error: Running with root privileges (sudo ./install.sh)"
-    exit 1
+  echo "Error: Running with root privileges (sudo ./install.sh)"
+  exit 1
 fi
 
 echo ""
@@ -127,13 +133,13 @@ DETECTED_IFACE=$(ip -o link show | awk -F': ' '
 # MAC address of the detected interface
 DETECTED_MAC=""
 if [ -n "$DETECTED_IFACE" ]; then
-    DETECTED_MAC=$(ip link show "$DETECTED_IFACE" | awk '/ether/{print $2}')
+  DETECTED_MAC=$(ip link show "$DETECTED_IFACE" | awk '/ether/{print $2}')
 fi
 
 # Server IP on the detected interface
 DETECTED_SERVER_IP=""
 if [ -n "$DETECTED_IFACE" ]; then
-    DETECTED_SERVER_IP=$(ip -4 addr show "$DETECTED_IFACE" | awk '/inet /{print $2}' | cut -d/ -f1)
+  DETECTED_SERVER_IP=$(ip -4 addr show "$DETECTED_IFACE" | awk '/inet /{print $2}' | cut -d/ -f1)
 fi
 
 # Default gateway (probable router IP)
@@ -154,37 +160,37 @@ echo "  (Press ENTER to accept the value in parentheses)"
 echo ""
 
 echo "  [Network]"
-ask "  Server NIC Interface"       "$DETECTED_IFACE"      NIC_IFACE
-ask "  MAC address NIC"            "$DETECTED_MAC"        NIC_MAC
-ask "  IP server"                  "$DETECTED_SERVER_IP"  SERVER_IP
-ask "  IP router (VLAN server)"    "$DETECTED_ROUTER_IP"  ROUTER_IP
-ask "  Router bridge name (e.g. br-server)" "br-server"   SERVER_IFACE
-ask "  WOL timeout in seconds"     "15"                   WOL_TIMEOUT
+ask "  Server NIC Interface" "$DETECTED_IFACE" NIC_IFACE
+ask "  MAC address NIC" "$DETECTED_MAC" NIC_MAC
+ask "  IP server" "$DETECTED_SERVER_IP" SERVER_IP
+ask "  IP router (VLAN server)" "$DETECTED_ROUTER_IP" ROUTER_IP
+ask "  Router bridge name (e.g. br-server)" "br-server" SERVER_IFACE
+ask "  WOL timeout in seconds" "15" WOL_TIMEOUT
 echo ""
 
 echo "  [TVHeadend — leave blank if not used]"
-ask       "  User tvheadend admin" "" TVH_USER
+ask "  User tvheadend admin" "" TVH_USER
 if [ -n "$TVH_USER" ]; then
-    ask_secret "  Password tvheadend" TVH_PASSWORD
+  ask_secret "  Password tvheadend" TVH_PASSWORD
 fi
 echo ""
 
 echo "  [TBS PCIe DVB cards — only if present]"
 ask_yesno "  Do you have TBS PCIe DVB (tbsecp3) cards?" "n" HAS_TBS
 if [ "$HAS_TBS" = "y" ]; then
-    # Automatically detects PCI addresses of TBS cards
-    TBS_PCI_ADDRS=$(lspci | grep -i "TBS\|TBSECP3" | awk '{print $1}' | sed 's/^/0000:/')
-    if [ -n "$TBS_PCI_ADDRS" ]; then
-        echo ""
-        echo "  TBS cards detected:"
-        echo "$TBS_PCI_ADDRS" | while read -r addr; do echo "    $addr"; done
-        TBS_PCI_1=$(echo "$TBS_PCI_ADDRS" | sed -n '1p')
-        TBS_PCI_2=$(echo "$TBS_PCI_ADDRS" | sed -n '2p')
-    else
-        echo "  No TBS card detected automatically."
-        ask "  PCI card address 1 (e.g. 0000:01:00.0)" "" TBS_PCI_1
-        ask "  PCI Card 2 Address (leave blank if absent)" "" TBS_PCI_2
-    fi
+  # Automatically detects PCI addresses of TBS cards
+  TBS_PCI_ADDRS=$(lspci | grep -i "TBS\|TBSECP3" | awk '{print $1}' | sed 's/^/0000:/')
+  if [ -n "$TBS_PCI_ADDRS" ]; then
+    echo ""
+    echo "  TBS cards detected:"
+    echo "$TBS_PCI_ADDRS" | while read -r addr; do echo "    $addr"; done
+    TBS_PCI_1=$(echo "$TBS_PCI_ADDRS" | sed -n '1p')
+    TBS_PCI_2=$(echo "$TBS_PCI_ADDRS" | sed -n '2p')
+  else
+    echo "  No TBS card detected automatically."
+    ask "  PCI card address 1 (e.g. 0000:01:00.0)" "" TBS_PCI_1
+    ask "  PCI Card 2 Address (leave blank if absent)" "" TBS_PCI_2
+  fi
 fi
 echo ""
 
@@ -206,9 +212,9 @@ echo ""
 
 ask_yesno "Proceed with installation?" "y" CONFIRM
 if [ "$CONFIRM" != "y" ]; then
-    echo "Installation cancelled."
-    trap - EXIT
-    exit 0
+  echo "Installation cancelled."
+  trap - EXIT
+  exit 0
 fi
 echo ""
 
@@ -218,38 +224,38 @@ echo ""
 
 echo "── Replacing variables in files ──"
 
-# Copy all files to the temporary directory while maintaining the structure
+# Copia tutti i file nella directory temporanea mantenendo la struttura
 for dir in "${SOURCE_DIRS[@]}"; do
-    if [ -d "$dir" ]; then
-        mkdir -p "$TEMP_DIR/$dir"
-        # Copy only if the source directory is not empty
-        find "$dir" -maxdepth 1 -type f -exec cp {} "$TEMP_DIR/$dir/" \;
-    fi
+  if [ -d "$dir" ]; then
+    mkdir -p "$TEMP_DIR/$dir"
+    # Copy only if the source directory is not empty
+    find "$dir" -maxdepth 1 -type f -exec cp {} "$TEMP_DIR/$dir/" \;
+  fi
 done
 
-# Function to replace placeholders in a file
+# Funzione per sostituire i placeholder in un file
 substitute() {
-    local file="$1"
-    [ -f "$file" ] || return
-    sed -i \
-        -e "s|{{ROUTER_IP}}|${ROUTER_IP}|g" \
-        -e "s|{{SERVER_IP}}|${SERVER_IP}|g" \
-        -e "s|{{SERVER_MAC}}|${SERVER_MAC:-$NIC_MAC}|g" \
-        -e "s|{{SERVER_IFACE}}|${SERVER_IFACE}|g" \
-        -e "s|{{WOL_TIMEOUT}}|${WOL_TIMEOUT}|g" \
-        -e "s|{{TVH_USER}}|${TVH_USER}|g" \
-        -e "s|{{TVH_PASSWORD}}|${TVH_PASSWORD}|g" \
-        -e "s|{{NIC_IFACE}}|${NIC_IFACE}|g" \
-        -e "s|{{NIC_MAC}}|${NIC_MAC}|g" \
-        -e "s|{{TBS_PCI_1}}|${TBS_PCI_1:-0000:00:00.0}|g" \
-        -e "s|{{TBS_PCI_2}}|${TBS_PCI_2:-0000:00:00.0}|g" \
-        "$file"
+  local file="$1"
+  [ -f "$file" ] || return
+  sed -i \
+    -e "s|{{ROUTER_IP}}|${ROUTER_IP}|g" \
+    -e "s|{{SERVER_IP}}|${SERVER_IP}|g" \
+    -e "s|{{SERVER_MAC}}|${SERVER_MAC:-$NIC_MAC}|g" \
+    -e "s|{{SERVER_IFACE}}|${SERVER_IFACE}|g" \
+    -e "s|{{WOL_TIMEOUT}}|${WOL_TIMEOUT}|g" \
+    -e "s|{{TVH_USER}}|${TVH_USER}|g" \
+    -e "s|{{TVH_PASSWORD}}|${TVH_PASSWORD}|g" \
+    -e "s|{{NIC_IFACE}}|${NIC_IFACE}|g" \
+    -e "s|{{NIC_MAC}}|${NIC_MAC}|g" \
+    -e "s|{{TBS_PCI_1}}|${TBS_PCI_1:-0000:00:00.0}|g" \
+    -e "s|{{TBS_PCI_2}}|${TBS_PCI_2:-0000:00:00.0}|g" \
+    "$file"
 }
 
 # Recursively finds all regular FILES and performs the substitute
 find "$TEMP_DIR" -type f | while read -r file; do
-    substitute "$file"
-    echo "  ✓ $file"
+  substitute "$file"
+  echo "  ✓ $file"
 done
 echo ""
 
@@ -260,29 +266,29 @@ echo ""
 echo "── Copying files ──"
 
 for dir in "${SOURCE_DIRS[@]}"; do
-    for file in "$TEMP_DIR/$dir"/*; do
-        [ -f "$file" ] || continue
-        filename=$(basename "$file")
+  for file in "$TEMP_DIR/$dir"/*; do
+    [ -f "$file" ] || continue
+    filename=$(basename "$file")
 
-        # The .link file is renamed to the name of the actual interface
-        # and copied separately — jump into the main loop
-        [[ "$filename" == *.link ]] && continue
+    # The .link file is renamed to the name of the actual interface
+    # and copied separately — jump into the main loop
+    [[ "$filename" == *.link ]] && continue
 
-        dest="/$dir/$filename"
-        cp -v "$file" "$dest"
-        # Make scripts executable
-        if [ "$dir" = "$BIN_FILES" ] || [ "$dir" = "$RESET_FILES" ]; then
-            chmod +x "$dest"
-        fi
-    done
+    dest="/$dir/$filename"
+    cp -v "$file" "$dest"
+    # Make scripts executable
+    if [ "$dir" = "$BIN_FILES" ] || [ "$dir" = "$RESET_FILES" ]; then
+      chmod +x "$dest"
+    fi
+  done
 done
 
 # Copy the .link file with the actual interface name
 LINK_SRC="$TEMP_DIR/$NETWORK_FILES/10-wol-eth1.link"
 LINK_DST="/etc/systemd/network/10-wol-${NIC_IFACE}.link"
 if [ -f "$LINK_SRC" ]; then
-    cp -v "$LINK_SRC" "$LINK_DST"
-    echo "  (rinominato in 10-wol-${NIC_IFACE}.link)"
+  cp -v "$LINK_SRC" "$LINK_DST"
+  echo "  (rinominato in 10-wol-${NIC_IFACE}.link)"
 fi
 echo ""
 
@@ -294,19 +300,19 @@ echo "── SSH configuration for the router ──"
 SSH_KEY="/root/.ssh/id_rsa_router"
 
 if [ ! -f "$SSH_KEY" ]; then
-    echo "  SSH Key Generation..."
-    ssh-keygen -t ed25519 -f "$SSH_KEY" -N "" -C "server-wol-script"
-    echo "  Generated key: $SSH_KEY"
+  echo "  SSH Key Generation..."
+  ssh-keygen -t ed25519 -f "$SSH_KEY" -N "" -C "server-wol-script"
+  echo "  Generated key: $SSH_KEY"
 fi
 
 echo "  Adding router to known_hosts..."
-ssh-keyscan -H "$ROUTER_IP" >> /root/.ssh/known_hosts 2>/dev/null
+ssh-keyscan -H "$ROUTER_IP" >>/root/.ssh/known_hosts 2>/dev/null
 
 echo ""
 echo "  Copy the public key to the router (you will be asked for the password only once):"
 ssh-copy-id -i "${SSH_KEY}.pub" "root@${ROUTER_IP}" || {
-    echo "  ⚠ Unable to copy key automatically."
-    echo "    Run manually: ssh-copy-id -i ${SSH_KEY}.pub root@${ROUTER_IP}"
+  echo "  ⚠ Unable to copy key automatically."
+  echo "    Run manually: ssh-copy-id -i ${SSH_KEY}.pub root@${ROUTER_IP}"
 }
 echo ""
 
@@ -336,8 +342,8 @@ echo ""
 
 echo "── Deploy configuration on the router ──"
 /usr/local/bin/apply-monitor-rules.sh && echo "  ✓ Router setup complete" || {
-    echo "  ⚠ apply-monitor-rules.sh returned an error."
-    echo "    Check SSH connectivity to the router and re-run manually."
+  echo "  ⚠ apply-monitor-rules.sh returned an error."
+  echo "    Check SSH connectivity to the router and re-run manually."
 }
 echo ""
 
