@@ -10,7 +10,7 @@ autoSusWol automatically suspends a home server when it's not in use and wakes i
 
 1. A timer runs `check-traffic.sh` on the server every 5 minutes
 2. The script checks for active connections to monitored services
-3. If no activity is detected (and no printer/TV is in use), the server suspends after a 60-second grace period
+3. If no activity is detected (no print job, TV streaming, open Samba files, Jellyfin playback or active connections), the server suspends after a 60-second grace period
 4. The router monitors firewall logs for connection attempts to the server ports
 5. When a connection attempt is detected, the router sends a WOL magic packet
 6. The server wakes up and becomes available within ~10 seconds
@@ -33,9 +33,9 @@ autoSusWol automatically suspends a home server when it's not in use and wakes i
                               |                        |
                               |  check-traffic.sh       |
                               |  apply-monitor-rules    |
-                              |  Docker containers:     |
+                              |  Containers:            |
                               |  - tvheadend            |
-                              |  - portainer            |
+                              |  - jellyfin             |
                               |  - klipper              |
                               +------------------------+
 ```
@@ -71,14 +71,14 @@ The server VLAN is configured so that all traffic between LAN and server passes 
 
 | File | Description |
 |---|---|
-| `apply-monitor-rules.sh` | Main config script — sets up nft rules on the server and deploys firewall rules + WOL scripts to the router via SSH |
-| `check-traffic.sh` | Checks for active connections and suspends the server if idle |
+| `apply-monitor-rules.sh` | Main config script — deploys firewall rules + WOL scripts to the router via SSH. It also creates nft packet counters on the server, which `check-traffic.sh` no longer reads (it uses established connections instead) |
+| `check-traffic.sh` | Checks printer, tvheadend, Samba, Jellyfin and active connections, and suspends the server if idle |
 
 ### Server side (`/etc/`)
 
 | File | Description |
 |---|---|
-| `monitor-ports.conf` | List of ports to monitor. Use `!wol-only` to include a port in the WOL trigger but exclude it from local connection checks |
+| `monitor-ports.conf` | List of ports to monitor. Every port wakes the server through the router; ports **not** marked `!wol-only` also keep it awake while they have established connections |
 | `systemd/system/apply-monitor-rules.service` | Runs `apply-monitor-rules.sh` at boot |
 | `systemd/system/check-traffic.service` | Oneshot service triggered by the timer |
 | `systemd/system/check-traffic.timer` | Runs `check-traffic.sh` every 5 minutes |
@@ -89,6 +89,13 @@ The server VLAN is configured so that all traffic between LAN and server passes 
 | File | Description |
 |---|---|
 | `tbsecp3-reset.sh` | Stops tvheadend and unloads TBS PCIe DVB tuner drivers before suspend; reloads them and restarts tvheadend after resume. Only needed with TBS PCIe DVB tuner cards. |
+
+### NixOS (`flake.nix`, `nix/`)
+
+| File | Description |
+|---|---|
+| `flake.nix` | Exposes `nixosModules.default` (alias `nixosModules.autoSusWol`) |
+| `nix/module.nix` | The `services.autoSusWol` module: wraps the scripts above, generates `/etc/monitor-ports.conf`, the systemd units and the sleep hook. See [NixOS](#nixos) |
 
 ### Router side (deployed automatically by `apply-monitor-rules.sh`)
 
@@ -109,6 +116,7 @@ The repository files use `{{PLACEHOLDER}}` syntax for all machine-specific value
 | `{{NIC_IFACE}}` | Server NIC interface name (e.g. `eth1`, `enp3s0`) | yes |
 | `{{NIC_MAC}}` | Server NIC MAC address | yes |
 | `{{SERVER_IP}}` | Server IP on the server VLAN | yes |
+| `{{SERVER_MAC}}` | Server MAC used by the router for the magic packet (same value as `{{NIC_MAC}}`) | yes |
 | `{{ROUTER_IP}}` | Router IP on the server VLAN | yes (from default gateway) |
 | `{{SERVER_IFACE}}` | Router bridge interface name (e.g. `br-server`) | asked (default: br-server) |
 | `{{WOL_TIMEOUT}}` | Max seconds to wait for server after WOL | asked (default: 15) |
@@ -135,7 +143,12 @@ The repository files use `{{PLACEHOLDER}}` syntax for all machine-specific value
 9090  # cockpit
 9981  # tvheadend http  !wol-only
 9982  # tvheadend https !wol-only
+8096  # jellyfin        !wol-only  -- playback checked via the Jellyfin API instead
 ```
+
+The same list drives both sides: `apply-monitor-rules.sh` turns every line into a `WOL_<name>` rule on the router, and `check-traffic.sh` treats every port **without** `!wol-only` as "in use" while it has established connections. After editing, re-run `apply-monitor-rules.sh` (NixOS: change `services.autoSusWol.ports` and rebuild).
+
+Secrets are not part of this file: `JELLYFIN_API_KEY` (and optionally `JELLYFIN_URL`) are read from the environment of `check-traffic.service`, see [Jellyfin](#jellyfin).
 
 ## Installation
 
@@ -289,7 +302,40 @@ autosuswol.nixosModules.default
 }
 ```
 
-Other options: `routerSshKey` (private key used to configure the router, default `/root/.ssh/id_rsa_router`), `routerHostKey` (router host key for `known_hosts`), `mac`, `routerBridge`, `wolTimeout`, `manageWol`. The router side is unchanged (see Installation, steps 1 and 2). The out-of-tree `tbsecp3` kernel module is not provided by this module.
+Other options: `routerSshKey` (private key used to configure the router, default `/root/.ssh/id_rsa_router`), `routerHostKey` (router host key for `known_hosts`), `mac`, `routerBridge`, `wolTimeout`, `manageWol`. The out-of-tree `tbsecp3` kernel module is not provided by this module.
+
+What the module sets up:
+- `/etc/monitor-ports.conf`, generated from `ports`
+- `check-traffic.service` and `check-traffic.timer` (every 5 minutes)
+- `apply-monitor-rules.service` at boot, and again whenever `ports` changes
+- Wake-on-LAN on the NIC (`manageWol`)
+- with `tbs.enable`, `tbsecp3-reset.service` bound to `sleep.target`, which replaces the system-sleep hook: it stops tvheadend and unloads the drivers when the system goes to sleep, and reverses that on resume
+
+### Router prerequisites and SSH key
+
+The router side is unchanged. Steps 1 and 2 of [Installation](#installation) (server bridge/zone and `etherwake`) are one-time prerequisites; the `WOL_*` firewall rules and the WOL scripts are still deployed automatically by `apply-monitor-rules.sh`.
+
+`install.sh` is not used on NixOS, so nothing generates the SSH key the server uses to reach the router. Create it once and add the public key to the router as a plain line (the script runs `uci`, `cat >` and init scripts, so it cannot be a restricted `command=` key):
+
+```bash
+ssh-keygen -t ed25519 -N "" -C "autosuswol" -f ./id_router
+ssh root@<ROUTER_IP> 'cat >> /etc/dropbear/authorized_keys' < id_router.pub
+```
+
+Keep the private key as a secret, for example with sops-nix (store it as a multi-line `|` YAML block so the trailing newline is kept), and point the module at it:
+
+```nix
+sops.secrets."autosuswol/router_ssh_key" = { };
+sops.secrets."autosuswol/jellyfin_api_key" = { };
+sops.templates."autosuswol.env".content = ''
+  JELLYFIN_API_KEY=${config.sops.placeholder."autosuswol/jellyfin_api_key"}
+'';
+
+services.autoSusWol.routerSshKey = config.sops.secrets."autosuswol/router_ssh_key".path;
+services.autoSusWol.environmentFile = config.sops.templates."autosuswol.env".path;
+```
+
+Finally accept the router's host key once with `sudo ssh -i <key> root@<ROUTER_IP>`, or set `routerHostKey`.
 
 ## WOL trigger logic
 
@@ -305,7 +351,7 @@ Other options: `routerSshKey` (private key used to configure the router, default
 
 If using TBS PCIe DVB tuner cards, `tbsecp3-reset.sh` is installed by `install.sh` to handle the driver lifecycle around suspend/resume.
 
-The script is called automatically by systemd-sleep at `/usr/lib/systemd/system-sleep/tbsecp3-reset.sh`.
+The script is called automatically by systemd-sleep at `/usr/lib/systemd/system-sleep/tbsecp3-reset.sh`. On NixOS the module runs the same script from a systemd unit bound to `sleep.target` instead.
 
 By default tvheadend is a Docker container. If it is a systemd unit instead (e.g. a Podman Quadlet), set `TVH_UNIT=tvheadend.service` in the script's environment and it is stopped/started with `systemctl` (a plain `podman stop` would be undone by the unit's restart policy).
 
@@ -318,8 +364,10 @@ The PCI addresses are specific to the hardware -- `install.sh` detects them auto
 ## Troubleshooting
 
 **Server doesn't suspend**
-- Run `sudo bash -x /usr/local/bin/check-traffic.sh` to see which check is blocking
+- Every run logs why it did or did not suspend: `journalctl -u check-traffic -n 20`
+- Run `sudo bash -x /usr/local/bin/check-traffic.sh` to see which check is blocking (it suspends the server if nothing is blocking). On NixOS the script is in the Nix store: `systemctl cat check-traffic` shows its path
 - Check Samba file activity: `sudo smbstatus --locked`
+- Check Jellyfin sessions: `curl -s -H "X-Emby-Token: <API_KEY>" http://localhost:8096/Sessions | jq '.[] | {item: .NowPlayingItem.Name, paused: .PlayState.IsPaused}'`
 - Check tvheadend connections: `curl -s "http://user:pass@localhost:9981/api/status/connections"`
 - Check other active connections: `ss -tn state established`
 
@@ -336,7 +384,8 @@ The PCI addresses are specific to the hardware -- `install.sh` detects them auto
 - Verify PCI addresses match your hardware: `lspci | grep -i tbs`
 
 **apply-monitor-rules.sh fails**
-- Check SSH connectivity: `sudo ssh -i /root/.ssh/id_rsa_router root@<ROUTER_IP> "echo OK"`
+- Check SSH connectivity: `sudo ssh -i /root/.ssh/id_rsa_router root@<ROUTER_IP> "echo OK"` (NixOS: use the path set in `routerSshKey`; `Host key verification failed` means the router host key was never accepted, see [Router prerequisites and SSH key](#router-prerequisites-and-ssh-key))
+- NixOS: `systemctl status apply-monitor-rules` and `journalctl -u apply-monitor-rules`
 - Check router reachability: `ping <ROUTER_IP>`
 - Run with debug: `sudo bash -x /usr/local/bin/apply-monitor-rules.sh`
 
