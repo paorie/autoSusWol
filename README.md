@@ -63,7 +63,7 @@ The server VLAN is configured so that all traffic between LAN and server passes 
 ### Router
 - OpenWrt 25.x with firewall4 (fw4)
 - `etherwake` (`apk add etherwake`)
-- Dedicated bridge interface for the server (`br-server`)
+- Dedicated bridge interface for the server (`br-server`) and a firewall zone named `server` (see Installation, step 1)
 
 ## Files
 
@@ -152,9 +152,17 @@ Secrets are not part of this file: `JELLYFIN_API_KEY` (and optionally `JELLYFIN_
 
 ## Installation
 
-### 1. Configure the router
+### 1. Prepare the server network on the router (one-time, not automated)
 
-Create a dedicated bridge interface for the server VLAN and connect the physical port:
+Neither `install.sh` nor `apply-monitor-rules.sh` touches the router's network configuration. They only deploy the `WOL_*` firewall rules and the WOL scripts, and those rules assume the server lives in its own network and firewall zone:
+
+- the server sits behind a dedicated bridge (`br-server`, subnet `192.168.20.0/24`) instead of the main LAN, so every connection from a client to the server is *routed* by the router. This is what lets fw4 log the attempt and trigger the wake-up;
+- the firewall zone must be named `server` and the clients' zone `lan`: the generated rules are hard-coded as `src='lan'` → `dest='server'`.
+
+If your router already has such a network, skip this step. You can check with `uci show network.SERVER` and `ip a show br-server`. Otherwise run the commands below once, adjusting `lan2` to the port the server is plugged into. Do not run them twice: `uci add` would create duplicate entries.
+
+<details>
+<summary>Commands to create the server network</summary>
 
 ```bash
 # Remove the server port from the main LAN bridge (adjust lan2 to your port)
@@ -205,7 +213,9 @@ uci commit firewall
 fw4 reload
 ```
 
-### 2. Install etherwake on the router
+</details>
+
+### 2. Install etherwake on the router (not automated either)
 
 ```bash
 apk add etherwake
@@ -313,7 +323,7 @@ What the module sets up:
 
 ### Router prerequisites and SSH key
 
-The router side is unchanged. Steps 1 and 2 of [Installation](#installation) (server bridge/zone and `etherwake`) are one-time prerequisites; the `WOL_*` firewall rules and the WOL scripts are still deployed automatically by `apply-monitor-rules.sh`.
+The router side is unchanged. Steps 1 and 2 of [Installation](#installation) (server network/zone and `etherwake`) are one-time prerequisites that no script performs, on any distro; the `WOL_*` firewall rules and the WOL scripts are deployed automatically by `apply-monitor-rules.sh`.
 
 `install.sh` is not used on NixOS, so nothing generates the SSH key the server uses to reach the router. Create it once and add the public key to the router as a plain line (the script runs `uci`, `cat >` and init scripts, so it cannot be a restricted `command=` key):
 
