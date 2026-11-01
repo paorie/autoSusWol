@@ -1,6 +1,13 @@
 #!/bin/bash
+CONF="/etc/monitor-ports.conf"
 TVH_USER="{{TVH_USER}}"
 TVH_PASSWORD="{{TVH_PASSWORD}}"
+
+# Jellyfin (opzionale): se JELLYFIN_API_KEY è vuota il controllo viene saltato.
+# Su Fedora: impostarla con un drop-in systemd (Environment=JELLYFIN_API_KEY=...)
+# Su NixOS: viene passata tramite environmentFile del modulo.
+JELLYFIN_URL="${JELLYFIN_URL:-http://localhost:8096}"
+JELLYFIN_API_KEY="${JELLYFIN_API_KEY:-}"
 
 # 1. CONTROLLO STAMPANTE
 IS_PRINTING=$(curl -s \
@@ -31,16 +38,37 @@ if [ "$SAMBA_FILES" -gt 0 ]; then
   exit 0
 fi
 
-# 4. CONTROLLO CONNESSIONI ATTIVE SULLE ALTRE PORTE MONITORATE
-# Porta 445 (Samba) esclusa — gestita dal controllo smbstatus sopra
-ACTIVE=$(ss -tn state established | grep -cE ":(80|7125|9000|9090) ")
+# 4. CONTROLLO JELLYFIN IN RIPRODUZIONE (API /Sessions)
+# Una sessione conta solo se sta riproducendo qualcosa e non è in pausa.
+# La porta 8096 va marcata !wol-only in monitor-ports.conf: serve solo al WOL.
+if [ -n "$JELLYFIN_API_KEY" ]; then
+  JELLYFIN_PLAYING=$(curl -s --max-time 5 \
+    -H "X-Emby-Token: $JELLYFIN_API_KEY" \
+    "$JELLYFIN_URL/Sessions" |
+    jq '[.[] | select(.NowPlayingItem != null and .PlayState.IsPaused != true)] | length' 2>/dev/null)
 
-if [ "$ACTIVE" -gt 0 ]; then
-  echo "Active connections detected ($ACTIVE). Suspension locked."
-  exit 0
+  if [ "${JELLYFIN_PLAYING:-0}" -gt 0 ]; then
+    echo "Jellyfin playing ($JELLYFIN_PLAYING sessions): Suspension locked."
+    exit 0
+  fi
 fi
 
-# 5. NESSUNA ATTIVITÀ — SOSPENSIONE
+# 5. CONTROLLO CONNESSIONI ATTIVE SULLE ALTRE PORTE MONITORATE
+# Le porte vengono lette da monitor-ports.conf (escluse quelle marcate !wol-only,
+# come Samba e tvheadend, gestite dai controlli specifici sopra).
+PORTS=$(grep -v 'wol-only' "$CONF" 2>/dev/null |
+  sed 's/#.*//' | grep -Eo '[0-9]+' | paste -sd'|' -)
+
+if [ -n "$PORTS" ]; then
+  ACTIVE=$(ss -tn state established | grep -cE ":($PORTS) ")
+
+  if [ "$ACTIVE" -gt 0 ]; then
+    echo "Active connections detected ($ACTIVE). Suspension locked."
+    exit 0
+  fi
+fi
+
+# 6. NESSUNA ATTIVITÀ — SOSPENSIONE
 echo "No activity detected. Suspending in 60 seconds...."
 sleep 60
 systemctl suspend

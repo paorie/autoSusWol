@@ -1,11 +1,32 @@
 #!/bin/bash
 
-CONTAINER_NAME=$(docker ps -a | grep -i tvheadend | awk '{print $NF}')
+# TVH_UNIT: se impostata (es. tvheadend.service, container Quadlet/Podman)
+# tvheadend viene fermato e riavviato con systemctl. Se vuota si usa il
+# container Docker, come prima.
+TVH_UNIT="${TVH_UNIT:-}"
+
+tvh_stop() {
+    if [ -n "$TVH_UNIT" ]; then
+        systemctl stop "$TVH_UNIT" 2>/dev/null
+    else
+        CONTAINER_NAME=$(docker ps -a | grep -i tvheadend | awk '{print $NF}')
+        docker stop -t 3 "$CONTAINER_NAME" 2>/dev/null
+    fi
+}
+
+tvh_start() {
+    if [ -n "$TVH_UNIT" ]; then
+        systemctl start "$TVH_UNIT" 2>/dev/null
+    else
+        CONTAINER_NAME=$(docker ps -a | grep -i tvheadend | awk '{print $NF}')
+        docker start "$CONTAINER_NAME" 2>/dev/null
+    fi
+}
 
 case $1 in
     pre)
         echo "tbsecp3-reset: pre-suspend - stopping tvheadend and unloading modules"
-        docker stop -t 3 "$CONTAINER_NAME" 2>/dev/null
+        tvh_stop
         echo 1 > /sys/bus/pci/devices/{{TBS_PCI_1}}/remove 2>/dev/null
         echo 1 > /sys/bus/pci/devices/{{TBS_PCI_2}}/remove 2>/dev/null
         sleep 1
@@ -22,6 +43,6 @@ case $1 in
         modprobe gx1133
         modprobe tbsecp3
         sleep 5
-        docker start "$CONTAINER_NAME" 2>/dev/null
+        tvh_start
         ;;
 esac

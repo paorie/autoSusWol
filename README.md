@@ -56,6 +56,7 @@ The server VLAN is configured so that all traffic between LAN and server passes 
 - Linux with systemd
 - `nftables`, `curl`, `ss` (iproute2), `ethtool`
 - `smbstatus` (samba-common, for Samba activity detection)
+- `jq` (only if the optional Jellyfin check is enabled)
 - WOL enabled in BIOS
 - SSH access to the router
 
@@ -232,9 +233,21 @@ This re-deploys the firewall rules and WOL scripts to the router without reinsta
 1. **3D printer is not printing** -- checked via Klipper Moonraker API (`/printer/objects/query?print_stats`)
 2. **No TV streaming active** -- checked via tvheadend API (`streaming: 1` in `/api/status/connections`)
 3. **No Samba files open** -- checked via `smbstatus --locked` (ignores background keepalive connections from SMB clients like KDE Dolphin/KIO)
-4. **No active TCP connections** on other monitored ports (80, 7125, 9000, 9090)
+4. **No Jellyfin playback** (optional) -- checked via the Jellyfin API (`GET /Sessions`: a session counts only if it has a `NowPlayingItem` and is not paused). Skipped when `JELLYFIN_API_KEY` is empty
+5. **No active TCP connections** on the monitored ports listed in `/etc/monitor-ports.conf` (ports marked `!wol-only` are excluded)
 
 When all conditions are met, the script waits 60 seconds before suspending (grace period for pending operations).
+
+### Jellyfin
+
+Create an API key in Jellyfin (Dashboard → Advanced → API Keys) and pass it to the service as `JELLYFIN_API_KEY` (optionally `JELLYFIN_URL`, default `http://localhost:8096`). On a classic install use a systemd drop-in (`systemctl edit check-traffic.service`):
+
+```ini
+[Service]
+Environment=JELLYFIN_API_KEY=your-key
+```
+
+Mark port 8096 as `!wol-only` in `monitor-ports.conf`: the web UI keeps WebSocket connections open even when nothing is playing, so the API check is the reliable one.
 
 ### Why smbstatus instead of ss for Samba
 
@@ -243,6 +256,40 @@ SMB clients (including KDE Dolphin/KIO) maintain persistent TCP keepalive connec
 ### Why !wol-only for tvheadend and Samba
 
 These services generate continuous background traffic (EPG sync, SMB keepalives) that would prevent suspension even when not actively in use. Marking them `!wol-only` excludes them from local traffic monitoring while keeping them in the router WOL trigger rules -- so the server still wakes up when a client actually tries to connect.
+
+## NixOS
+
+The repository is also a flake exposing a NixOS module, so no `install.sh` is needed. The module reuses the very same scripts: `{{PLACEHOLDER}}` values are filled at build time from the module options, and secrets are read at runtime from an `environmentFile` (they never enter the Nix store).
+
+```nix
+# flake.nix of the server
+inputs.autosuswol.url = "github:paorie/autoSusWol";
+
+# in the modules list
+autosuswol.nixosModules.default
+{
+  services.autoSusWol = {
+    enable = true;
+    nic = "eth1";
+    serverIp = "192.168.20.100";
+    routerIp = "192.168.20.1";
+    environmentFile = "/run/secrets/autosuswol.env"; # TVH_USER, TVH_PASSWORD, JELLYFIN_API_KEY (all optional)
+    ports = [
+      { port = 80;   name = "http"; }
+      { port = 445;  name = "samba";    wolOnly = true; }
+      { port = 8096; name = "jellyfin"; wolOnly = true; }
+    ];
+    # TBS PCIe tuners, tvheadend managed as a systemd unit (e.g. a Quadlet container)
+    tbs = {
+      enable = true;
+      pciAddresses = [ "0000:01:00.0" "0000:02:00.0" ];
+      tvheadendUnit = "tvheadend.service";
+    };
+  };
+}
+```
+
+Other options: `routerSshKey` (private key used to configure the router, default `/root/.ssh/id_rsa_router`), `routerHostKey` (router host key for `known_hosts`), `mac`, `routerBridge`, `wolTimeout`, `manageWol`. The router side is unchanged (see Installation, steps 1 and 2). The out-of-tree `tbsecp3` kernel module is not provided by this module.
 
 ## WOL trigger logic
 
@@ -259,6 +306,8 @@ These services generate continuous background traffic (EPG sync, SMB keepalives)
 If using TBS PCIe DVB tuner cards, `tbsecp3-reset.sh` is installed by `install.sh` to handle the driver lifecycle around suspend/resume.
 
 The script is called automatically by systemd-sleep at `/usr/lib/systemd/system-sleep/tbsecp3-reset.sh`.
+
+By default tvheadend is a Docker container. If it is a systemd unit instead (e.g. a Podman Quadlet), set `TVH_UNIT=tvheadend.service` in the script's environment and it is stopped/started with `systemctl` (a plain `podman stop` would be undone by the unit's restart policy).
 
 **Pre-suspend**: stops the tvheadend container, removes the TBS PCIe devices from the PCI bus, then unloads the driver modules (`tbsecp3`, `gx1133`, `tas2101`) to prevent i2c timeout errors that can cause the system to freeze during suspend.
 
