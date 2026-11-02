@@ -69,6 +69,14 @@ if [ -n "$PORTS" ]; then
 fi
 
 # 6. NESSUNA ATTIVITÀ — SOSPENSIONE
-echo "No activity detected. Suspending in 60 seconds...."
-sleep 60
+# Dopo la pausa di 60 secondi tutti i controlli vengono rifatti da capo
+# (l'script si rilancia): se nel frattempo qualcosa è tornato attivo, uno dei
+# controlli sopra esce senza sospendere.
+if [ -z "$AUTOSUSWOL_RECHECK" ]; then
+  echo "No activity detected. Rechecking in 60 seconds...."
+  sleep 60
+  AUTOSUSWOL_RECHECK=1 exec "$0"
+fi
+
+echo "Still no activity after the grace period. Suspending."
 systemctl suspend
