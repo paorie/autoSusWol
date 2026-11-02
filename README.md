@@ -255,7 +255,7 @@ This re-deploys the firewall rules and WOL scripts to the router without reinsta
 
 1. **3D printer is not printing** -- checked via Klipper Moonraker API (`/printer/objects/query?print_stats`)
 2. **No TV streaming active** -- checked via tvheadend API (`streaming: 1` in `/api/status/connections`)
-3. **No Samba files open** -- checked via `smbstatus --locked` (ignores background keepalive connections from SMB clients like KDE Dolphin/KIO)
+3. **No Samba files open** -- checked via `smbstatus -L` (ignores background keepalive connections from SMB clients like KDE Dolphin/KIO)
 4. **No Jellyfin playback** (optional) -- checked via the Jellyfin API (`GET /Sessions`: a session counts only if it has a `NowPlayingItem` and is not paused). Skipped when `JELLYFIN_API_KEY` is empty
 5. **No active TCP connections** on the monitored ports listed in `/etc/monitor-ports.conf` (ports marked `!wol-only` are excluded)
 
@@ -274,7 +274,7 @@ Mark port 8096 as `!wol-only` in `monitor-ports.conf`: the web UI keeps WebSocke
 
 ### Why smbstatus instead of ss for Samba
 
-SMB clients (including KDE Dolphin/KIO) maintain persistent TCP keepalive connections to Samba shares even when no files are in use. Using `ss` to detect port 445 activity would prevent the server from ever suspending. `smbstatus --locked` only reports files that are actually open, making it a reliable indicator of real Samba usage.
+SMB clients (including KDE Dolphin/KIO) maintain persistent TCP keepalive connections to Samba shares even when no files are in use. Using `ss` to detect port 445 activity would prevent the server from ever suspending. `smbstatus -L` only reports files that are actually open, making it a reliable indicator of real Samba usage.
 
 ### Why !wol-only for tvheadend and Samba
 

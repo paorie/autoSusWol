@@ -31,7 +31,10 @@ fi
 
 # 3. CONTROLLO FILE SAMBA APERTI
 # Usa smbstatus invece di ss per evitare falsi positivi da keepalive KIO/Dolphin
-SAMBA_FILES=$(smbstatus --locked 2>/dev/null | grep -c ".")
+# `smbstatus -L` stampa una riga con DENY_* per ogni file aperto; con nessun file
+# stampa solo l'intestazione o "No locked files", che qui non vengono contate.
+# (--locked non è più accettato dalle versioni recenti di Samba.)
+SAMBA_FILES=$(smbstatus -L 2>/dev/null | grep -c "DENY_")
 
 if [ "$SAMBA_FILES" -gt 0 ]; then
   echo "Open Samba files ($SAMBA_FILES). Suspension locked."
