@@ -46,7 +46,7 @@ fi
 # La porta 8096 va marcata !wol-only in monitor-ports.conf: serve solo al WOL.
 if [ -n "$JELLYFIN_API_KEY" ]; then
   JELLYFIN_PLAYING=$(curl -s --max-time 5 \
-    -H "X-Emby-Token: $JELLYFIN_API_KEY" \
+    -H "Authorization: MediaBrowser Token="$JELLYFIN_API_KEY"" \
     "$JELLYFIN_URL/Sessions" |
     jq '[.[] | select(.NowPlayingItem != null and .PlayState.IsPaused != true)] | length' 2>/dev/null)
 
